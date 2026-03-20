@@ -32,30 +32,57 @@ X3=391
 Y3=374
 
 usage() {
-  echo "Usage: $0 -i <input-audio> [-t <title text>]"
+  echo "Usage: $0 -i <input-audio> [-t <title text>] [--bars-only] [--compose-only]"
 }
 
 INPUT=""
-while getopts ":i:t:h" opt; do
-  case "$opt" in
-    i) INPUT="$OPTARG" ;;
-    t) TITLE_TEXT="$OPTARG" ;;
-    h)
+BARS_ONLY=0
+COMPOSE_ONLY=0
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -i)
+      if [ "$#" -lt 2 ]; then
+        echo "Error: option -i requires an argument." >&2
+        usage >&2
+        exit 1
+      fi
+      INPUT="$2"
+      shift 2
+      ;;
+    -t)
+      if [ "$#" -lt 2 ]; then
+        echo "Error: option -t requires an argument." >&2
+        usage >&2
+        exit 1
+      fi
+      TITLE_TEXT="$2"
+      shift 2
+      ;;
+    --bars-only)
+      BARS_ONLY=1
+      shift
+      ;;
+    --compose-only)
+      COMPOSE_ONLY=1
+      shift
+      ;;
+    -h|--help)
       usage
       exit 0
       ;;
-    :)
-      echo "Error: option -$OPTARG requires an argument." >&2
-      usage >&2
-      exit 1
-      ;;
-    \?)
-      echo "Error: unknown option -$OPTARG" >&2
+    *)
+      echo "Error: unknown option $1" >&2
       usage >&2
       exit 1
       ;;
   esac
 done
+
+if [ "$BARS_ONLY" -eq 1 ] && [ "$COMPOSE_ONLY" -eq 1 ]; then
+  echo "Error: --bars-only and --compose-only cannot be used together." >&2
+  usage >&2
+  exit 1
+fi
 
 if [ -z "$INPUT" ]; then
   echo "Error: -i is required." >&2
@@ -63,7 +90,7 @@ if [ -z "$INPUT" ]; then
   exit 1
 fi
 
-if [ ! -f "$INPUT" ]; then
+if [ "$COMPOSE_ONLY" -eq 0 ] && [ ! -f "$INPUT" ]; then
   echo "Error: input file not found: $INPUT" >&2
   exit 1
 fi
@@ -86,15 +113,28 @@ cleanup() {
 }
 trap cleanup EXIT
 
-echo "Rendering spectrum: $INPUT -> $BARS_MOV"
+if [ "$COMPOSE_ONLY" -eq 0 ]; then
+  echo "Rendering spectrum: $INPUT -> $BARS_MOV"
 
-ffmpeg -y -i "$INPUT" \
-  -filter_complex "[0:a]pan=mono|c0=FL,asplit=2[aout][avis];[avis]highpass=f=50,lowpass=f=4000,volume=2,aresample=22050,showfreqs=s=20x400:mode=bar:fscale=log:ascale=log:win_func=blackman:win_size=2048:overlap=0.8:averaging=5:rate=30:colors=white,scale=640:480:flags=neighbor,crop=640:474:0:6,pad=640:480:0:6:black,setsar=1,format=gray,geq=lum='if(lt(mod(X,32),30)*gt(lum(X,Y),26+(1-Y/H)*60),255,0)'[alpha];color=c=white:s=640x480:r=30,format=rgb24[white];[white][alpha]alphamerge,format=yuva444p10le[v]" \
-  -map "[v]" -map "[aout]" \
-  -c:v prores_ks -profile:v 4444 -pix_fmt yuva444p10le -r 30 -fps_mode cfr \
-  -c:a aac -b:a 192k \
-  -shortest \
-  "$BARS_MOV"
+  ffmpeg -y -i "$INPUT" \
+    -filter_complex "[0:a]pan=mono|c0=FL,asplit=2[aout][avis];[avis]highpass=f=50,lowpass=f=4000,volume=1,aresample=22050,showfreqs=s=20x400:mode=bar:fscale=log:ascale=log:win_func=blackman:win_size=2048:overlap=0.8:averaging=5:rate=30:colors=white,scale=640:480:flags=neighbor,crop=640:474:0:6,pad=640:480:0:6:black,setsar=1,format=gray,geq=lum='if(lt(mod(X,32),30)*gt(lum(X,Y),26+(1-Y/H)*60+170*pow(1-Y/H,4)),255,0)'[alpha];color=c=white:s=640x480:r=30,format=rgb24[white];[white][alpha]alphamerge,format=yuva444p10le[v]" \
+    -map "[v]" -map "[aout]" \
+    -c:v prores_ks -profile:v 4444 -pix_fmt yuva444p10le -r 30 -fps_mode cfr \
+    -c:a aac -b:a 192k \
+    -shortest \
+    "$BARS_MOV"
+
+  if [ "$BARS_ONLY" -eq 1 ]; then
+    echo "Done: $BARS_MOV"
+    exit 0
+  fi
+else
+  if [ ! -f "$BARS_MOV" ]; then
+    echo "Error: bars file not found: $BARS_MOV" >&2
+    exit 1
+  fi
+  echo "Skipping spectrum render (--compose-only), using: $BARS_MOV"
+fi
 
 # Local coordinates for perspective filter (relative to overlay origin)
 LX0=0
