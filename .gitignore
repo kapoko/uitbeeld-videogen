@@ -1,1 +1,3 @@
-bars.mov
+*.mov
+*.mp4
+.DS_Store

@@ -8,7 +8,7 @@ Generate a video from audio with CRT-style spectrum.
 
 ## Usage
 ```bash
-./generate.sh -i "/path/to/input.mp3" [-t "#1: THRASHIN' 1986"]
+./generate.sh -i "/path/to/input.mp3" -t "#1: THRASHIN' 1986"
 ```
 
 - `-i` is required

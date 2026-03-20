@@ -89,7 +89,7 @@ trap cleanup EXIT
 echo "Rendering spectrum: $INPUT -> $BARS_MOV"
 
 ffmpeg -y -i "$INPUT" \
-  -filter_complex "[0:a]pan=mono|c0=FL,asplit=2[aout][avis];[avis]highpass=f=50,lowpass=f=4000,volume=2,aresample=22050,showfreqs=s=20x400:mode=bar:fscale=log:ascale=log:win_func=blackman:win_size=2048:overlap=0.8698:averaging=5:rate=30:colors=white,scale=640:480:flags=neighbor,setsar=1,format=gray,geq=lum='if(lt(mod(X,32),30)*gt(Y,2)*gt(lum(X,Y),26+(1-Y/H)*60),255,0)'[alpha];color=c=white:s=640x480:r=30,format=rgb24[white];[white][alpha]alphamerge,format=yuva444p10le[v]" \
+  -filter_complex "[0:a]pan=mono|c0=FL,asplit=2[aout][avis];[avis]highpass=f=50,lowpass=f=4000,volume=2,aresample=22050,showfreqs=s=20x400:mode=bar:fscale=log:ascale=log:win_func=blackman:win_size=2048:overlap=0.8:averaging=5:rate=30:colors=white,scale=640:480:flags=neighbor,crop=640:474:0:6,pad=640:480:0:6:black,setsar=1,format=gray,geq=lum='if(lt(mod(X,32),30)*gt(lum(X,Y),26+(1-Y/H)*60),255,0)'[alpha];color=c=white:s=640x480:r=30,format=rgb24[white];[white][alpha]alphamerge,format=yuva444p10le[v]" \
   -map "[v]" -map "[aout]" \
   -c:v prores_ks -profile:v 4444 -pix_fmt yuva444p10le -r 30 -fps_mode cfr \
   -c:a aac -b:a 192k \
