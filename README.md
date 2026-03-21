@@ -13,6 +13,8 @@ Generate a video from audio with CRT-style spectrum.
 
 - `-i` is required
 - `-t` is optional (title text)
+- `--bars-only` renders only `bars.mov` (skip compositing)
+- `--compose-only` skips rendering and composes using existing `bars.mov`
 - Output is written next to input as `.mp4`
 
 If you use `-t`, keep `Kanit-Bold.ttf` in the same folder as `generate.sh`.
