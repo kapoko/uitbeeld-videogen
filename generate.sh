@@ -37,7 +37,7 @@ X3=391
 Y3=374
 
 usage() {
-  echo "Usage: $0 -i <input-audio> [-t <title text>] [-p <poster-image>] [--bars-only] [--compose-only]"
+  echo "Usage: $0 -i <input-audio> [-t <title text>] [-p <poster-image-or-url>] [--preset <x264-preset>] [--benchmark]"
   echo ""
   echo "When -t is used without -p, TMDB_API_KEY is loaded from .env (or prompted once if missing)."
 }
@@ -189,6 +189,7 @@ process_poster_darker_color() {
   local poster_path="$1"
   local tmp_output=""
   local threshold=0
+  local inner_width=0
 
   if [ ! -f "$poster_path" ]; then
     echo "Error: poster file not found for processing: $poster_path" >&2
@@ -196,10 +197,15 @@ process_poster_darker_color() {
   fi
 
   threshold=$((POSTER_BLEND_BG_R + POSTER_BLEND_BG_G + POSTER_BLEND_BG_B))
+  inner_width=$((POSTER_WIDTH - (POSTER_BORDER_PX * 2)))
+  if [ "$inner_width" -le 0 ]; then
+    echo "Error: POSTER_WIDTH must be greater than 2*POSTER_BORDER_PX." >&2
+    exit 1
+  fi
   tmp_output="$(mktemp /tmp/generate-poster-XXXXXX).jpg"
 
-  ffmpeg -y -i "$poster_path" \
-    -vf "hue=s=0,format=rgb24,geq=r='if(lte(r(X,Y)+g(X,Y)+b(X,Y),${threshold}),max(r(X,Y),${POSTER_BLACK_FLOOR}),${POSTER_BLEND_BG_R})':g='if(lte(r(X,Y)+g(X,Y)+b(X,Y),${threshold}),max(g(X,Y),${POSTER_BLACK_FLOOR}),${POSTER_BLEND_BG_G})':b='if(lte(r(X,Y)+g(X,Y)+b(X,Y),${threshold}),max(b(X,Y),${POSTER_BLACK_FLOOR}),${POSTER_BLEND_BG_B})'" \
+  ffmpeg "${FFMPEG_BENCH_ARGS[@]}" -y -i "$poster_path" \
+    -vf "scale=${inner_width}:-1,hue=s=0,format=rgb24,geq=r='if(lte(r(X,Y)+g(X,Y)+b(X,Y),${threshold}),max(r(X,Y),${POSTER_BLACK_FLOOR}),${POSTER_BLEND_BG_R})':g='if(lte(r(X,Y)+g(X,Y)+b(X,Y),${threshold}),max(g(X,Y),${POSTER_BLACK_FLOOR}),${POSTER_BLEND_BG_G})':b='if(lte(r(X,Y)+g(X,Y)+b(X,Y),${threshold}),max(b(X,Y),${POSTER_BLACK_FLOOR}),${POSTER_BLEND_BG_B})',pad=w=iw+${POSTER_BORDER_PX}*2:h=ih+${POSTER_BORDER_PX}*2:x=${POSTER_BORDER_PX}:y=${POSTER_BORDER_PX}:color=${POSTER_BORDER_COLOR},noise=alls=${POSTER_NOISE}:allf=u" \
     -frames:v 1 "$tmp_output"
 
   mv "$tmp_output" "$poster_path"
@@ -212,8 +218,6 @@ compose_background_with_poster() {
   local bg_height=""
   local poster_width=""
   local poster_height=""
-  local inner_width=0
-  local scaled_height=""
   local centered_y=""
 
   if [ ! -f "$bg_path" ]; then
@@ -228,26 +232,21 @@ compose_background_with_poster() {
   bg_height="$(ffprobe -v error -select_streams v:0 -show_entries stream=height -of csv=p=0 "$bg_path")"
   poster_width="$(ffprobe -v error -select_streams v:0 -show_entries stream=width -of csv=p=0 "$poster_path")"
   poster_height="$(ffprobe -v error -select_streams v:0 -show_entries stream=height -of csv=p=0 "$poster_path")"
-  inner_width=$((POSTER_WIDTH - (POSTER_BORDER_PX * 2)))
-  if [ "$inner_width" -le 0 ]; then
-    echo "Error: POSTER_WIDTH must be greater than 2*POSTER_BORDER_PX." >&2
-    exit 1
-  fi
   if [ -n "$bg_height" ] && [ -n "$poster_width" ] && [ -n "$poster_height" ]; then
-    scaled_height="$(python3 -c 'import sys; w=int(sys.argv[1]); h=int(sys.argv[2]); tw=int(sys.argv[3]); b=int(sys.argv[4]); print(round(h*tw/w) + (2*b))' "$poster_width" "$poster_height" "$inner_width" "$POSTER_BORDER_PX")"
-    centered_y=$(( (bg_height - scaled_height) / 2 ))
+    centered_y=$(( (bg_height - poster_height) / 2 ))
     echo "Poster centered y resolves to: ${centered_y}px"
   fi
 
-  ffmpeg -y -i "$bg_path" -i "$poster_path" \
-    -filter_complex "[1:v]scale=${inner_width}:-1,pad=w=iw+${POSTER_BORDER_PX}*2:h=ih+${POSTER_BORDER_PX}*2:x=${POSTER_BORDER_PX}:y=${POSTER_BORDER_PX}:color=${POSTER_BORDER_COLOR},noise=alls=${POSTER_NOISE}:allf=u[poster];[0:v][poster]overlay=x=${POSTER_X}:y=(H-h)/2,format=yuv420p[v]" \
+  ffmpeg "${FFMPEG_BENCH_ARGS[@]}" -y -i "$bg_path" -i "$poster_path" \
+    -filter_complex "[0:v][1:v]overlay=x=${POSTER_X}:y=(H-h)/2,format=yuv420p[v]" \
     -map "[v]" -frames:v 1 "$output_path"
 }
 
 INPUT=""
 POSTER_IMAGE_PATH=""
-BARS_ONLY=0
-COMPOSE_ONLY=0
+X264_PRESET="veryfast"
+BENCHMARK=0
+FFMPEG_BENCH_ARGS=()
 while [ "$#" -gt 0 ]; do
   case "$1" in
     -i)
@@ -277,12 +276,17 @@ while [ "$#" -gt 0 ]; do
       POSTER_IMAGE_PATH="$2"
       shift 2
       ;;
-    --bars-only)
-      BARS_ONLY=1
-      shift
+    --preset)
+      if [ "$#" -lt 2 ]; then
+        echo "Error: option --preset requires an argument." >&2
+        usage >&2
+        exit 1
+      fi
+      X264_PRESET="$2"
+      shift 2
       ;;
-    --compose-only)
-      COMPOSE_ONLY=1
+    --benchmark)
+      BENCHMARK=1
       shift
       ;;
     -h|--help)
@@ -297,10 +301,9 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
-if [ "$BARS_ONLY" -eq 1 ] && [ "$COMPOSE_ONLY" -eq 1 ]; then
-  echo "Error: --bars-only and --compose-only cannot be used together." >&2
-  usage >&2
-  exit 1
+if [ "$BENCHMARK" -eq 1 ]; then
+  FFMPEG_BENCH_ARGS=(-benchmark)
+  echo "Benchmark mode enabled: ffmpeg timing stats will be printed."
 fi
 
 if [ -z "$INPUT" ]; then
@@ -309,11 +312,16 @@ if [ -z "$INPUT" ]; then
   exit 1
 fi
 
+if [ -z "$X264_PRESET" ]; then
+  echo "Error: --preset cannot be empty." >&2
+  exit 1
+fi
+
 if [ -n "$TITLE_TEXT" ]; then
   TITLE_TEXT="$(capitalize_title "$TITLE_TEXT")"
 fi
 
-if [ "$COMPOSE_ONLY" -eq 0 ] && [ ! -f "$INPUT" ]; then
+if [ ! -f "$INPUT" ]; then
   echo "Error: input file not found: $INPUT" >&2
   exit 1
 fi
@@ -332,7 +340,6 @@ else
   OUTPUT="$IN_DIR/$IN_BASE.mp4"
 fi
 
-BARS_MOV="$SCRIPT_DIR/bars.mov"
 TMDB_JSON=""
 POSTER_PATH=""
 BG_COMPOSITE=""
@@ -360,39 +367,18 @@ if [ -n "$POSTER_IMAGE_PATH" ]; then
     echo "Using provided poster image: $POSTER_IMAGE_PATH -> $POSTER_PATH"
     cp "$POSTER_IMAGE_PATH" "$POSTER_PATH"
   fi
+
+  echo "Applying Darker Color blend to poster.jpg"
+  process_poster_darker_color "$POSTER_PATH"
 elif [ -n "$TITLE_TEXT" ]; then
   POSTER_PATH="$IN_DIR/poster.jpg"
   echo "Fetching TMDB poster to: $POSTER_PATH"
   fetch_tmdb_poster "$TITLE_TEXT" "$POSTER_PATH"
-fi
-
-if [ -n "$POSTER_PATH" ] && [ -f "$POSTER_PATH" ]; then
   echo "Applying Darker Color blend to poster.jpg"
   process_poster_darker_color "$POSTER_PATH"
 fi
 
-if [ "$COMPOSE_ONLY" -eq 0 ]; then
-  echo "Rendering spectrum: $INPUT -> $BARS_MOV"
-
-  ffmpeg -y -i "$INPUT" \
-    -filter_complex "[0:a]pan=mono|c0=FL,asplit=2[aout][avis];[avis]highpass=f=50,lowpass=f=4000,volume=1,aresample=22050,showfreqs=s=20x400:mode=bar:fscale=log:ascale=log:win_func=blackman:win_size=2048:overlap=0.8:averaging=5:rate=30:colors=white,scale=640:480:flags=neighbor,crop=640:474:0:6,pad=640:480:0:6:black,setsar=1,format=gray,geq=lum='if(lt(mod(X,32),30)*gt(lum(X,Y),26+(1-Y/H)*60+170*pow(1-Y/H,4)),255,0)'[alpha];color=c=white:s=640x480:r=30,format=rgb24[white];[white][alpha]alphamerge,format=yuva444p10le[v]" \
-    -map "[v]" -map "[aout]" \
-    -c:v prores_ks -profile:v 4444 -pix_fmt yuva444p10le -r 30 -fps_mode cfr \
-    -c:a aac -b:a 192k \
-    -shortest \
-    "$BARS_MOV"
-
-  if [ "$BARS_ONLY" -eq 1 ]; then
-    echo "Done: $BARS_MOV"
-    exit 0
-  fi
-else
-  if [ ! -f "$BARS_MOV" ]; then
-    echo "Error: bars file not found: $BARS_MOV" >&2
-    exit 1
-  fi
-  echo "Skipping spectrum render (--compose-only), using: $BARS_MOV"
-fi
+BARS_GEN_FILTER="[1:a]pan=mono|c0=FL,asplit=2[aout][avis];[avis]highpass=f=50,lowpass=f=4000,volume=1,aresample=22050,showfreqs=s=20x400:mode=bar:fscale=log:ascale=log:win_func=blackman:win_size=2048:overlap=0.8:averaging=5:rate=30:colors=white,scale=640:480:flags=neighbor,crop=640:474:0:6,pad=640:480:0:6:black,setsar=1,format=gray,geq=lum='if(lt(mod(X,32),30)*gt(lum(X,Y),26+(1-Y/H)*60+170*pow(1-Y/H,4)),255,0)'[alpha];color=c=white:s=640x480:r=30,format=rgb24[white];[white][alpha]alphamerge,format=yuva444p10le[barsv]"
 
 if [ -n "$POSTER_PATH" ] && [ -f "$POSTER_PATH" ]; then
   BG_COMPOSITE="$(mktemp /tmp/generate-bg-XXXXXX).png"
@@ -418,19 +404,19 @@ e1y=$((LX3 - LX1)); e1x=$((-(LY3 - LY1))); e1c=$(((LY3 - LY1) * LX1 - (LX3 - LX1
 e2y=$((LX2 - LX3)); e2x=$((-(LY2 - LY3))); e2c=$(((LY2 - LY3) * LX3 - (LX2 - LX3) * LY3))
 e3y=$((LX0 - LX2)); e3x=$((-(LY0 - LY2))); e3c=$(((LY0 - LY2) * LX2 - (LX0 - LX2) * LY2))
 
-MASK_EXPR="if(gte(${e0y}*Y+${e0x}*X+${e0c},0)*gte(${e1y}*Y+${e1x}*X+${e1c},0)*gte(${e2y}*Y+${e2x}*X+${e2c},0)*gte(${e3y}*Y+${e3x}*X+${e3c},0),alpha(X,Y),0)"
+MASK_COND="gte(${e0y}*Y+${e0x}*X+${e0c},0)*gte(${e1y}*Y+${e1x}*X+${e1c},0)*gte(${e2y}*Y+${e2x}*X+${e2c},0)*gte(${e3y}*Y+${e3x}*X+${e3c},0)"
 
-CORE_FILTER="[1:v]format=rgba,split=2[ovrgb][ovalpha];[ovrgb]format=rgb24,lenscorrection=k1=${CRT_WARP_K1}:k2=${CRT_WARP_K2}:cx=0.5:cy=0.5:i=bilinear,format=yuv444p,noise=c0s=${CRT_NOISE}:c0f=t+u:c1s=0:c2s=0,format=rgb24,split=2[prebloom][prebloomblur];[prebloomblur]gblur=sigma=${CRT_BLOOM_SIGMA}[glow];[prebloom][glow]blend=all_mode=screen:all_opacity=${CRT_BLOOM_OPACITY},geq=r='clip(r(X,Y)*if(lt(mod(Y,3),1),0.82,1)*if(lt(mod(X,3),1),1.10,0.90),0,255)':g='clip(g(X,Y)*if(lt(mod(Y,3),1),0.82,1)*if(lt(mod(X,3),1),0.88,if(lt(mod(X,3),2),1.08,0.90)),0,255)':b='clip(b(X,Y)*if(lt(mod(Y,3),1),0.82,1)*if(lt(mod(X,3),2),0.88,1.10),0,255)',perspective=sense=destination:x0=${LX0}:y0=${LY0}:x1=${LX1}:y1=${LY1}:x2=${LX2}:y2=${LY2}:x3=${LX3}:y3=${LY3}[warprgb];[ovalpha]alphaextract,lenscorrection=k1=${CRT_WARP_K1}:k2=${CRT_WARP_K2}:cx=0.5:cy=0.5:i=bilinear,perspective=sense=destination:x0=${LX0}:y0=${LY0}:x1=${LX1}:y1=${LY1}:x2=${LX2}:y2=${LY2}:x3=${LX3}:y3=${LY3}[warpa];[warprgb][warpa]alphamerge,format=rgba,geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='${MASK_EXPR}'[warp];[0:v][warp]overlay=${X0}:${Y0}:format=auto[base]"
+CORE_FILTER_ONEPASS="[barsv]format=rgba,split=2[ovrgba][ovalpha_src];[ovrgba]format=yuv444p,noise=c0s=${CRT_NOISE}:c0f=t+u:c1s=0:c2s=0,format=rgb24,split=2[prebloom][prebloomblur];[prebloomblur]gblur=sigma=${CRT_BLOOM_SIGMA}[glow];[prebloom][glow]blend=all_mode=screen:all_opacity=${CRT_BLOOM_OPACITY},geq=r='clip(r(X,Y)*if(lt(mod(Y,3),1),0.82,1)*if(lt(mod(X,3),1),1.10,0.90),0,255)':g='clip(g(X,Y)*if(lt(mod(Y,3),1),0.82,1)*if(lt(mod(X,3),1),0.88,if(lt(mod(X,3),2),1.08,0.90)),0,255)':b='clip(b(X,Y)*if(lt(mod(Y,3),1),0.82,1)*if(lt(mod(X,3),2),0.88,1.10),0,255)'[ovrgbfx];[ovalpha_src]alphaextract[ovalpha];[ovrgbfx][ovalpha]alphamerge,format=rgba,lenscorrection=k1=${CRT_WARP_K1}:k2=${CRT_WARP_K2}:cx=0.5:cy=0.5:i=bilinear,perspective=sense=destination:x0=${LX0}:y0=${LY0}:x1=${LX1}:y1=${LY1}:x2=${LX2}:y2=${LY2}:x3=${LX3}:y3=${LY3},split=2[wrgb][wa];[wa]alphaextract,geq=lum='if(${MASK_COND},lum(X,Y),0)'[wamask];[wrgb][wamask]alphamerge[warp];[0:v][warp]overlay=${X0}:${Y0}:format=auto[base]"
 
-FILTER_COMPLEX="${CORE_FILTER};[base]format=yuv420p[v]"
-
-echo "Compositing final video: $BARS_MOV -> $OUTPUT"
-ffmpeg -y \
+FILTER_COMPLEX="${BARS_GEN_FILTER};${CORE_FILTER_ONEPASS};[base]format=yuv420p[v]"
+echo "Rendering + compositing in one pass: $INPUT -> $OUTPUT"
+ffmpeg "${FFMPEG_BENCH_ARGS[@]}" -y \
   -framerate 30 -loop 1 -i "$BG_INPUT" \
-  -i "$BARS_MOV" \
+  -i "$INPUT" \
   -filter_complex "$FILTER_COMPLEX" \
-  -map "[v]" -map 1:a \
-  -c:v libx264 -r 30 -fps_mode cfr -c:a copy \
+  -map "[v]" -map "[aout]" \
+  -c:v libx264 -preset "$X264_PRESET" -r 30 -fps_mode cfr \
+  -c:a aac -b:a 192k \
   -shortest \
   "$OUTPUT"
 

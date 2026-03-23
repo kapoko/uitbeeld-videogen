@@ -24,8 +24,9 @@ Or pass a direct image URL:
 - `-i` is required
 - `-t` is optional (movie title, used for TMDB poster lookup)
 - `-p` is optional (poster path or image URL, overrides TMDB lookup)
-- `--bars-only` renders only `bars.mov` (skip compositing)
-- `--compose-only` skips rendering and composes using existing `bars.mov`
+- `--preset` sets x264 preset for final encode (default: `veryfast`)
+- `--benchmark` prints ffmpeg timing stats for each render step
+- Rendering/compositing runs in one pass (no intermediate `bars.mov`)
 - Output is written next to input as `.mp4`
 
 ## TMDB API key
