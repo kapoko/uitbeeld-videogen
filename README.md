@@ -10,6 +10,9 @@ Generate a video from audio with CRT-style spectrum.
 ## Usage
 ```bash
 ./generate.sh -i "/path/to/input.mp3" -t "The Handmaiden 2016"
+
+# quick 5-second preview render
+./generate.sh -i "/path/to/input.mp3" -t "The Handmaiden 2016" --preview
 ```
 
 Use a manual poster instead of TMDB:
@@ -26,6 +29,7 @@ Or pass a direct image URL:
 - `-p` is optional (poster path or image URL, overrides TMDB lookup)
 - `--preset` sets x264 preset for final encode (default: `veryfast`)
 - `--benchmark` prints ffmpeg timing stats for each render step
+- `--preview` renders only the first 5 seconds to `<input>.preview.mp4`
 - Rendering/compositing runs in one pass (no intermediate `bars.mov`)
 - Output is written next to input as `.mp4`
 

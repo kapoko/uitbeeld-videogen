@@ -37,7 +37,7 @@ X3=391
 Y3=374
 
 usage() {
-  echo "Usage: $0 -i <input-audio> [-t <title text>] [-p <poster-image-or-url>] [--preset <x264-preset>] [--benchmark]"
+  echo "Usage: $0 -i <input-audio> [-t <title text>] [-p <poster-image-or-url>] [--preset <x264-preset>] [--benchmark] [--preview]"
   echo ""
   echo "When -t is used without -p, TMDB_API_KEY is loaded from .env (or prompted once if missing)."
 }
@@ -246,7 +246,9 @@ INPUT=""
 POSTER_IMAGE_PATH=""
 X264_PRESET="veryfast"
 BENCHMARK=0
+PREVIEW=0
 FFMPEG_BENCH_ARGS=()
+FFMPEG_DURATION_ARGS=()
 while [ "$#" -gt 0 ]; do
   case "$1" in
     -i)
@@ -289,6 +291,10 @@ while [ "$#" -gt 0 ]; do
       BENCHMARK=1
       shift
       ;;
+    --preview)
+      PREVIEW=1
+      shift
+      ;;
     -h|--help)
       usage
       exit 0
@@ -304,6 +310,11 @@ done
 if [ "$BENCHMARK" -eq 1 ]; then
   FFMPEG_BENCH_ARGS=(-benchmark)
   echo "Benchmark mode enabled: ffmpeg timing stats will be printed."
+fi
+
+if [ "$PREVIEW" -eq 1 ]; then
+  echo "Preview mode enabled: rendering first 5 seconds only."
+  FFMPEG_DURATION_ARGS=(-t 5)
 fi
 
 if [ -z "$INPUT" ]; then
@@ -338,6 +349,10 @@ if [ "$IN_BASE" = "$IN_NAME" ]; then
   OUTPUT="$IN_DIR/$IN_NAME.mp4"
 else
   OUTPUT="$IN_DIR/$IN_BASE.mp4"
+fi
+
+if [ "$PREVIEW" -eq 1 ]; then
+  OUTPUT="$IN_DIR/${IN_BASE}.preview.mp4"
 fi
 
 TMDB_JSON=""
@@ -417,6 +432,7 @@ ffmpeg "${FFMPEG_BENCH_ARGS[@]}" -y \
   -map "[v]" -map "[aout]" \
   -c:v libx264 -preset "$X264_PRESET" -r 30 -fps_mode cfr \
   -c:a aac -b:a 192k \
+  "${FFMPEG_DURATION_ARGS[@]}" \
   -shortest \
   "$OUTPUT"
 
